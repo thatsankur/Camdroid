@@ -15,10 +15,13 @@ import org.opencv.android.Utils;
 import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
+import org.opencv.core.MatOfByte;
 import org.opencv.core.MatOfPoint;
 import org.opencv.core.Point;
+import org.opencv.core.Range;
 import org.opencv.core.Scalar;
 import org.opencv.core.Size;
+import org.opencv.imgcodecs.Imgcodecs;
 import org.opencv.imgproc.Imgproc;
 import org.opencv.photo.Photo;
 
@@ -242,32 +245,142 @@ public class OCRProcessor extends AbstractOpenCVFrameProcessor {
         }
 
         protected void execute() {
-            out = gray();
+//            out = gray();
+            Mat rgb =rgb();
+            Mat matOfByte = zoneOut(rgb);
+            if(matOfByte!=null) {
+                matOfByte.copyTo(out);
+                Log.d("Ankur", matOfByte + "");
+            }else{
+                rgb.copyTo(out);
+            }
 
-            Imgproc.equalizeHist(out, out);
-            Core.normalize(out, out, min, max, Core.NORM_MINMAX);
+//            Imgproc.equalizeHist(out, out);
+//            Core.normalize(out, out, min, max, Core.NORM_MINMAX);
+//
+//            Imgproc.adaptiveThreshold(out, out, 255, Imgproc.THRESH_BINARY,
+//                    Imgproc.ADAPTIVE_THRESH_MEAN_C, blocksize, reduction);
+//
+//            byte[] data = new byte[(int) out.total()];
+//            out.get(0, 0, data);
+//
+//            this.tessBaseAPI.setImage(data, out.width(), out.height(),
+//                    out.channels(), (int) out.step1());
+//
+//            String utf8Text = this.tessBaseAPI.getUTF8Text();
+//            int score = this.tessBaseAPI.meanConfidence();
+//            this.tessBaseAPI.clear();
+//
+//
+//            if (score >= SIMPLETEXT_MIN_SCORE && utf8Text.length() > 0) {
+//                simpleText = utf8Text;
+//            } else {
+//                simpleText = new String();
+//            }
+        }
 
-            Imgproc.adaptiveThreshold(out, out, 255, Imgproc.THRESH_BINARY,
-                    Imgproc.ADAPTIVE_THRESH_MEAN_C, blocksize, reduction);
+    }
+    private static Mat zoneOut( Mat original) {
+        Imgproc imgproc = new Imgproc();
+        Mat rectKernel;
+        Mat sqKernel;
+        rectKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(13, 5));
+        sqKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(34, 34));
+//        Mat original = new Mat(val);
+        Mat gray = new Mat();
 
-            byte[] data = new byte[(int) out.total()];
-            out.get(0, 0, data);
+        imgproc.cvtColor(original,gray,Imgproc.COLOR_BGR2GRAY);
+        Imgproc.GaussianBlur(gray, gray, new Size(3, 3), 0);
+        Mat blackHat = new Mat();
+        Imgproc.morphologyEx(gray, blackHat, Imgproc.MORPH_BLACKHAT, rectKernel);
+        //compute the Scharr gradient of the blackhat image and scale the
+        //result into the range[0, 255]
+        Mat gradX = new Mat();
+        Mat abs_grad_x = new Mat();
+        int scale = 1;
+        int delta = 0;
+        Imgproc.Sobel(blackHat, gradX, CvType.CV_8UC1, 1, 0, -1, scale, delta, Core.BORDER_DEFAULT);
+        Core.convertScaleAbs(gradX, abs_grad_x);
 
-            this.tessBaseAPI.setImage(data, out.width(), out.height(),
-                    out.channels(), (int) out.step1());
+        //apply a closing operation using the rectangular kernel to close
+        // gaps in between letters — then apply Otsu’s thresholding method
+        double threshValue = 0;
+        double maxValue = 255;
+        Mat thresh = new Mat();
+        Imgproc.morphologyEx(gradX, gradX, Imgproc.MORPH_CLOSE, rectKernel);
+        Imgproc.threshold(gradX, thresh, threshValue, maxValue, Imgproc.THRESH_BINARY | Imgproc.THRESH_OTSU);
+        // perform another closing operation, this time using the square
+        // kernel to close gaps between lines of the MRZ, then perform a
+        // serieso of erosions to break apart connected components
+        Mat thresh2 = new Mat();
+        Mat k = new Mat();
+        Imgproc.morphologyEx(thresh, thresh2, Imgproc.MORPH_CLOSE, sqKernel);
+        Imgproc.erode(thresh2, thresh, k, new Point(-1, -1), 4);
 
-            String utf8Text = this.tessBaseAPI.getUTF8Text();
-            int score = this.tessBaseAPI.meanConfidence();
-            this.tessBaseAPI.clear();
+        // find contours in the thresholded image and sort them by their
+        // sizes
+        List<MatOfPoint> cnts = new ArrayList<MatOfPoint>();
+        Mat hierarchy = new Mat();//not sure
+        try {
+            Imgproc.findContours(thresh, cnts,hierarchy, imgproc.CV_RETR_EXTERNAL, imgproc.CV_CHAIN_APPROX_SIMPLE);
+        }
+        catch (Exception  e) {
+            e.printStackTrace();
+        }
 
+        Mat roi = new Mat();
+        // loop over the contours
+        for (int  i = 0; i < cnts.size(); i++) {
+            org.opencv.core.Rect rect = Imgproc.boundingRect(cnts.get(i));
+            float ar = rect.width / (float)(rect.height);
+            float crWidth = rect.width / (float)(gray.size().height);
 
-            if (score >= SIMPLETEXT_MIN_SCORE && utf8Text.length() > 0) {
-                simpleText = utf8Text;
-            } else {
-                simpleText = new String();
+            // check to see if the aspect ratio and coverage width are within
+            // acceptable criteria
+            if (ar > 5 && crWidth > 0.75) {
+                // pad the bounding box since we applied erosions and now need
+                // to re – grow it
+                int pX = (int)((rect.x + rect.width) * 0.03);
+                int pY = (int)((rect.y + rect.height) * 0.03);
+                int x = rect.x - pX;
+                int y = rect.y - pY;
+                int w = rect.width + (pX * 2);
+                int h = rect.height + (pY * 2);
+
+                // extract the ROI from the image and draw a bounding box
+                // surrounding the MRZ
+                try {
+                    original.submat(new Range(y, y + h), new Range(x, x + w)).copyTo(roi);
+//                    image(new Range(y, y + h), new Range(x, x + w)).copyTo(roi);
+                    Imgproc.rectangle(original, new Point(x, y), new Point(x + w, y + h), new Scalar(0, 255, 0), 2, Imgproc.LINE_8, 0);
+                }
+                catch (Exception e) {
+                    e.printStackTrace();
+                }
+                break;
             }
         }
 
+        //return to java crop image
+        if (!roi.empty() && roi.cols() > 0) {
+            Mat outImg = new Mat();
+            //0.75
+            Imgproc.resize(roi, outImg, new Size(roi.cols() * 0.99, roi.rows() * 0.99), 0, 0, Imgproc.CV_INTER_LINEAR);
+
+            MatOfByte imageDesV = new MatOfByte();
+            Imgcodecs.imencode(".bmp", outImg, imageDesV);
+            //convert vector<char> to jbyteArray
+//            jbyte* result_e = new jbyte[imageDesV.size()];
+//            jbyteArray result = env->NewByteArray(imageDesV.size());
+//            for (int i = 0; i < imageDesV.size(); i++) {
+//                result_e[i] = (jbyte)imageDesV[i];
+//            }
+//            env->SetByteArrayRegion(result, 0, imageDesV.size(), result_e);
+            return outImg;
+        }
+        else {
+            return null;
+        }
     }
 
 }

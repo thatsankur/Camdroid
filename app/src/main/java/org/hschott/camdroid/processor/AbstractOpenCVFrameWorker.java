@@ -152,4 +152,7 @@ public abstract class AbstractOpenCVFrameWorker implements FrameWorker {
         Core.extractChannel(mat, this.split, c);
         return this.split;
     }
+
+
+
 }
