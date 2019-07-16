@@ -26,5 +26,6 @@ android {
 dependencies {
     compile fileTree(include: ['*.jar'], dir: 'libs')
     compile project(':openCVLibrary300')
-    compile project(':tesseractLibrary30202')
+    implementation 'com.rmtheis:tess-two:9.0.0'
+//    compile project(':tesseractLibrary30202')
 }

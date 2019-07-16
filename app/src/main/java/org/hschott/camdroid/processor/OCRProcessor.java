@@ -206,7 +206,7 @@ public class OCRProcessor extends AbstractOpenCVFrameProcessor {
             this.tessBaseAPI = new TessBaseAPI();
             this.tessBaseAPI.setPageSegMode(PageSegMode.PSM_AUTO_OSD);
 
-            this.tessBaseAPI.setVariable(TessBaseAPI.VAR_ACCURACYVSPEED,
+            this.tessBaseAPI.setVariable("tessedit_accuracyvspeed",
                     String.valueOf(50));
             this.tessBaseAPI.init(Environment.getExternalStorageDirectory().getPath(), "eng");
 
